@@ -1,17 +1,16 @@
 import javax.swing.*;
 import javax.swing.table.*;
-
 import com.formdev.flatlaf.FlatDarculaLaf;
-
 import java.awt.BorderLayout;
+import java.sql.*;
 import java.awt.Color;
 import java.awt.Font;
-import java.sql.*;
+import java.awt.print.PrinterException;
 import java.text.DateFormat;
+import java.text.MessageFormat;
 import java.time.LocalDate;
 import java.time.format.*;
-// import com.formdev.flatlaf.FlatDarculaLaf;
-
+import java.util.*;
 
 
 @SuppressWarnings("unused")
@@ -21,7 +20,6 @@ public class DecentBuyFrame extends JFrame{
     
     LocalDate currentDate = LocalDate.now();
     DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
-
     private final Color primaryColor = new Color(0, 122, 204);   // Blue
     private final Color secondaryColor = new Color(98, 114, 164); // Magenta
 
@@ -39,7 +37,6 @@ public class DecentBuyFrame extends JFrame{
         setSize(800, 600);
         setLocationRelativeTo(null);
 
-    
         add(createTabbedPane(dbConn));
         setVisible(true);
     }
@@ -50,7 +47,7 @@ public class DecentBuyFrame extends JFrame{
         // Customize tabbedPane appearance
         tabbedPane.setFont(new Font("Segoe UI", Font.PLAIN, 14));
         tabbedPane.setForeground(primaryColor);
-        
+
         tabbedPane.addTab("Product Inventory", createInventoryPanel(dbConn));
         tabbedPane.addTab("Orders", createOrdersPanel(dbConn));
         //tabbedPane.addTab("Cancelled Orders", createCompletedOrdersPanel(dbConn));
@@ -80,25 +77,46 @@ public class DecentBuyFrame extends JFrame{
 
     public JPanel createSearchPanel(Connection dbConn, JTable table) {
         JPanel searchPanel = new JPanel();
-        //searchPanel.setBackground(Color.DARK_GRAY);
         searchPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 
-        String[] searchOptions = {"idProducts", "productName", "productCategory", "productBrand", "productPrice", "productStock"};
-        JComboBox<String> searchDropdown = new JComboBox<>(searchOptions);
+        // Use LinkedHashMap to maintain insertion order
+        Map<String, String> columnMapping = new LinkedHashMap<>();
+        columnMapping.put("idProducts", "ID");
+        columnMapping.put("productName", "Name");
+        columnMapping.put("productCategory", "Category");
+        columnMapping.put("productBrand", "Brand");
+        columnMapping.put("productPrice", "Price");
+        columnMapping.put("productStock", "Stock");
+
+        // Extract the user-friendly names for the dropdown in order
+        List<String> userFriendlyNames = new ArrayList<>(columnMapping.values());
+        JComboBox<String> searchDropdown = new JComboBox<>(userFriendlyNames.toArray(new String[0]));
+
         searchDropdown.setFont(new Font("Segoe UI", Font.PLAIN, 14));
         searchDropdown.setForeground(Color.WHITE);
         searchDropdown.setBackground(Color.GRAY);
 
         JTextField searchTextField = new JTextField(15);
         searchTextField.setFont(new Font("Segoe UI", Font.PLAIN, 14));
-
         JButton searchButton = new JButton("Search");
         styleButton(searchButton, primaryColor, secondaryColor);
 
-        searchButton.addActionListener(e -> {
+        // Create instance of DecentBuyOrderData to call searchBarInventory
+        DecentBuyOrderData orderData = new DecentBuyOrderData();
 
+        searchButton.addActionListener(e -> {
             try {
-                DBDB_OrderData.searchBarInventory(dbConn, table, searchDropdown.getSelectedItem().toString(), searchTextField.getText());
+                // Map user-friendly name back to database column
+                String selectedName = (String) searchDropdown.getSelectedItem();
+                String searchCriterion = columnMapping.entrySet()
+                        .stream()
+                        .filter(entry -> entry.getValue().equals(selectedName))
+                        .findFirst()
+                        .map(Map.Entry::getKey)
+                        .orElseThrow(() -> new IllegalArgumentException("Invalid Selection"));
+
+                // Perform the search
+                orderData.searchBarInventory(dbConn, table, searchCriterion, searchTextField.getText());
             } catch (SQLException ex) {
                 ex.printStackTrace();
             }
@@ -109,12 +127,14 @@ public class DecentBuyFrame extends JFrame{
         searchPanel.add(searchButton);
         return searchPanel;
     }
-
     public JPanel createOrderSearchPanel(Connection dbConn, JTable table) {
         JPanel searchPanel = new JPanel();
         searchPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 
-        String[] searchOptions = {"idDBOrder", "Current", "Pending", "Cancelled", "Customer", "Supplier"};
+        DecentBuyOrderData orderData = new DecentBuyOrderData();
+
+        // Define user-friendly search options
+        String[] searchOptions = {"Order ID", "Order Date", "Customer First Name", "Customer Last Name", "Order Status", "Product Name", "Current", "Pending", "Cancelled", "Supplier"};
         JComboBox<String> searchDropdown = new JComboBox<>(searchOptions);
         searchDropdown.setFont(new Font("Segoe UI", Font.PLAIN, 14));
         searchDropdown.setForeground(Color.WHITE);
@@ -122,16 +142,27 @@ public class DecentBuyFrame extends JFrame{
 
         JTextField searchTextField = new JTextField(15);
         searchTextField.setFont(new Font("Segoe UI", Font.PLAIN, 14));
-        
+
         JButton searchButton = new JButton("Search");
         styleButton(searchButton, primaryColor, secondaryColor);
 
         searchButton.addActionListener(e -> {
+            String searchInput = searchTextField.getText();
+            String searchCriterion = (String) searchDropdown.getSelectedItem();
+
+            if (searchInput.isEmpty()) {
+                JOptionPane.showMessageDialog(null, "Please enter a search query.");
+                return;
+            }
 
             try {
-                DBDB_OrderData.searchBarInventory(dbConn, table, searchDropdown.getSelectedItem().toString(), searchTextField.getText());
+                // Call the existing searchBarOrder function
+                orderData.searchBarOrder(dbConn, table, searchCriterion, searchInput);
             } catch (SQLException ex) {
                 ex.printStackTrace();
+                JOptionPane.showMessageDialog(null, "Error searching for data: " + ex.getMessage());
+            } catch (IllegalArgumentException ex) {
+                JOptionPane.showMessageDialog(null, ex.getMessage());
             }
         });
 
@@ -141,20 +172,27 @@ public class DecentBuyFrame extends JFrame{
         return searchPanel;
     }
 
+
     public JPanel createInventoryButtonPanel(Connection dbConn, JTable table) {
         JPanel buttonPanel = new JPanel();
-        JButton refreshButton = new JButton("Refresh Inventory");
-        refreshButton.addActionListener(e -> {
+
+        // Refresh Button
+        JButton inventoryRefreshButton = new JButton("Refresh Inventory");
+        inventoryRefreshButton.addActionListener(e -> {
             try {
-                updateInventoryQuantities(dbConn);
                 DBDB_OrderData.loadInventoryData(dbConn, table);
+                System.out.println("Inventory refreshed successfully.");
             } catch (SQLException ex) {
+                System.out.println("Error refreshing inventory:");
                 ex.printStackTrace();
             }
         });
-        buttonPanel.add(refreshButton);
+        buttonPanel.add(inventoryRefreshButton);
 
-        JButton editButton = new JButton("Edit Product");
+
+
+        // Edit Button
+        JButton editButton = new JButton("Edit Stock");
         editButton.addActionListener(e -> {
             int selectedRow = table.getSelectedRow();
             if (selectedRow == -1) {
@@ -167,12 +205,37 @@ public class DecentBuyFrame extends JFrame{
         });
         buttonPanel.add(editButton);
 
-         // **Add Product Button**
+        // Add Product Button
         JButton addButton = new JButton("Add Product");
         addButton.addActionListener(e -> openAddProductDialog(dbConn, table));
         buttonPanel.add(addButton);
 
-        return buttonPanel;
+         // **New: Print Stock Report Button**
+        JButton printReportButton = new JButton("Print Stock Report");
+        styleButton(printReportButton, secondaryColor, secondaryColor);
+        printReportButton.addActionListener(e -> {
+            try {
+                boolean complete = table.print(JTable.PrintMode.FIT_WIDTH, 
+                    new MessageFormat("DecentBuy Inventory - Stock Report\nDate: " + LocalDate.now()), 
+                    new MessageFormat("Page - {0}"));
+
+                if (complete) {
+                    JOptionPane.showMessageDialog(this, "Printing Complete", "Print", JOptionPane.INFORMATION_MESSAGE);
+                } else {
+                    JOptionPane.showMessageDialog(this, "Printing Cancelled", "Print", JOptionPane.WARNING_MESSAGE);
+                }
+            } catch (PrinterException pe) {
+                pe.printStackTrace();
+                JOptionPane.showMessageDialog(this, "Printing Failed: " + pe.getMessage(), "Print Error", JOptionPane.ERROR_MESSAGE);
+            }
+        });
+        buttonPanel.add(printReportButton);
+
+        
+
+            
+
+            return buttonPanel;
     }
 
     private void openAddProductDialog(Connection dbConn, JTable table) {
@@ -352,7 +415,7 @@ public class DecentBuyFrame extends JFrame{
 
 
     private void updateInventoryQuantities(Connection dbConn) throws SQLException {
-        String updateInventorySQL = 
+        String updateInventorySQL =
                 "UPDATE Products AS inventory " +
                 "JOIN " +
                     "(SELECT ProductsName, SUM(ProductsStock) AS total_ordered " +
@@ -367,7 +430,7 @@ public class DecentBuyFrame extends JFrame{
             System.out.println(rowsUpdated + " inventory items updated based on pending orders.");
         }
 
-        String markedProcessedSQL = 
+        String markedProcessedSQL =
             "UPDATE DBOrder SET processed = TRUE WHERE processed = FALSE";
         try (PreparedStatement pstmt = dbConn.prepareStatement(markedProcessedSQL)) {
             pstmt.executeUpdate();
@@ -412,6 +475,18 @@ public class DecentBuyFrame extends JFrame{
         });
         buttonPanel.add(addOrderButton);
 
+        JButton editOrderButton = new JButton("Edit Order");
+        editOrderButton.addActionListener(e -> {
+            int selectedRow = ordersTable.getSelectedRow();
+            if (selectedRow == -1) {
+                JOptionPane.showMessageDialog(null, "Please select an order to edit.");
+                return;
+            }
+            // Call the function to open the Edit Order dialog
+            openEditOrderDialog(dbConn, selectedRow, ordersTable);
+        });
+        buttonPanel.add(editOrderButton);
+
         ordersPanel.add(buttonPanel, BorderLayout.SOUTH);
         return ordersPanel;
     }
@@ -447,7 +522,7 @@ public class DecentBuyFrame extends JFrame{
     JComboBox<String> customerComboBox = new JComboBox<>(); // Populates products
     try {
         Statement stmt = dbConn.createStatement();
-        ResultSet rs = stmt.executeQuery("SELECT concat(customerFirst, customerLast) As Name FROM Customer");
+        ResultSet rs = stmt.executeQuery("SELECT concat(customerFirst, ' ', customerLast) As Name FROM Customer");
         while (rs.next()) {
             customerComboBox.addItem(rs.getString("Name"));
         }
@@ -594,12 +669,140 @@ public class DecentBuyFrame extends JFrame{
     }
 }
 
+    private void openEditOrderDialog(Connection dbConn, int selectedRow, JTable ordersTable)
+    {
+
+        // Get the selected order data
+        int orderId = (int) ordersTable.getValueAt(selectedRow, 0);
+        String fullName = (String) ordersTable.getValueAt(selectedRow, 1);  // Full name from table
+        String[] nameParts = fullName.split(" ");  // Split the full name into first and last name
+        String firstName = nameParts[0];
+        String lastName = nameParts.length > 1 ? nameParts[1] : "";
+
+        String orderDate = (String) ordersTable.getValueAt(selectedRow, 2);
+        int quantity = (int) ordersTable.getValueAt(selectedRow, 3);
+        String productName = (String) ordersTable.getValueAt(selectedRow, 4);
+        double productPrice = (double) ordersTable.getValueAt(selectedRow, 5);
+        double totalCost = (double) ordersTable.getValueAt(selectedRow, 6);
+        String orderStatus = (String) ordersTable.getValueAt(selectedRow, 7);
+        DecentBuyOrderData decentBuyOrderData = new DecentBuyOrderData();
+
+        // Create the Edit Order dialog
+        JDialog editDialog = new JDialog();
+        editDialog.setTitle("Edit Order");
+        editDialog.setSize(400, 300);
+        editDialog.setLocationRelativeTo(null);
+
+        // Create textfields for editing
+        JTextField firstNameField = new JTextField(firstName);
+        JTextField lastNameField = new JTextField(lastName);
+        JTextField orderDateField = new JTextField(orderDate);
+        JTextField quantityField = new JTextField(String.valueOf(quantity));
+        JTextField productNameField = new JTextField(productName);
+        JTextField productPriceField = new JTextField(String.valueOf(productPrice));
+        JTextField totalCostField = new JTextField(String.valueOf(totalCost));
+        JTextField orderStatusField = new JTextField(orderStatus);
+
+        // Create buttons
+        JButton saveButton = new JButton("Save");
+        JButton cancelButton = new JButton("Cancel");
+
+        saveButton.setBounds(150, 250, 95, 30);
+        cancelButton.setBounds(255, 250, 95, 30);
+
+        editDialog.setLayout(null);  // No layout manager, absolute positioning
+
+        // Create labels
+        JLabel firstNameLabel = new JLabel("First Name:");
+        JLabel lastNameLabel = new JLabel("Last Name:");
+        JLabel orderDateLabel = new JLabel("Order Date:");
+        JLabel quantityLabel = new JLabel("Quantity:");
+        JLabel productNameLabel = new JLabel("Product Name:");
+        JLabel productPriceLabel = new JLabel("Product Price:");
+        JLabel totalCostLabel = new JLabel("Total Cost:");
+        JLabel orderStatusLabel = new JLabel("Order Status:");
+
+        // Position labels and textfields
+        firstNameLabel.setBounds(30, 10, 100, 25);
+        lastNameLabel.setBounds(30, 40, 100, 25);
+        orderDateLabel.setBounds(30, 70, 100, 25);
+        quantityLabel.setBounds(30, 100, 100, 25);
+        productNameLabel.setBounds(30, 130, 100, 25);
+        productPriceLabel.setBounds(30, 160, 100, 25);
+        totalCostLabel.setBounds(30, 190, 100, 25);
+        orderStatusLabel.setBounds(30, 220, 100, 25);
+
+        firstNameField.setBounds(150, 10, 200, 25);
+        lastNameField.setBounds(150, 40, 200, 25);
+        orderDateField.setBounds(150, 70, 200, 25);
+        quantityField.setBounds(150, 100, 200, 25);
+        productNameField.setBounds(150, 130, 200, 25);
+        productPriceField.setBounds(150, 160, 200, 25);
+        totalCostField.setBounds(150, 190, 200, 25);
+        orderStatusField.setBounds(150, 220, 200, 25);
+
+        saveButton.setBounds(150, 250, 95, 30);
+        cancelButton.setBounds(255, 250, 95, 30);
+
+        // Add labels next to the textfield
+        editDialog.add(firstNameLabel);
+        editDialog.add(lastNameLabel);
+        editDialog.add(orderDateLabel);
+        editDialog.add(quantityLabel);
+        editDialog.add(productNameLabel);
+        editDialog.add(productPriceLabel);
+        editDialog.add(totalCostLabel);
+        editDialog.add(orderStatusLabel);
+
+        // Add textfields
+        editDialog.add(firstNameField);
+        editDialog.add(lastNameField);
+        editDialog.add(orderDateField);
+        editDialog.add(quantityField);
+        editDialog.add(productNameField);
+        editDialog.add(productPriceField);
+        editDialog.add(totalCostField);
+        editDialog.add(orderStatusField);
+        editDialog.add(saveButton);
+        editDialog.add(cancelButton);
+
+        // Create Save button action
+        saveButton.addActionListener(saveEvent -> {
+            try {
+                decentBuyOrderData.saveEditedOrder(dbConn, orderId, firstNameField.getText(), lastNameField.getText(),
+                        orderDateField.getText(), Integer.parseInt(quantityField.getText()),
+                        productNameField.getText(), Double.parseDouble(productPriceField.getText()),
+                        Double.parseDouble(totalCostField.getText()), orderStatusField.getText());
+                editDialog.dispose();
+                decentBuyOrderData.loadOrdersData(dbConn, ordersTable); // Refresh the table after saving
+                JOptionPane.showMessageDialog(null, "Order updated successfully.");
+            } catch (SQLException ex) {
+                JOptionPane.showMessageDialog(null, "Error saving order: " + ex.getMessage());
+                ex.printStackTrace();
+            }
+        });
+
+        // Cancel button setup
+        cancelButton.addActionListener(cancelEvent -> editDialog.dispose());
+
+        // Show the dialog
+        editDialog.setVisible(true);
+    }
+
+    private JPanel createFieldPanel(String label, JTextField textField) {
+        JPanel panel = new JPanel();
+        panel.add(new JLabel(label));  // Add the label
+        panel.add(textField);          // Add the text field
+        return panel;
+    }
+
     public static void main(String[] args) {
         try {
             new DecentBuyFrame();
         } catch (SQLException e) {
             e.printStackTrace();
         }
+
     }
 
     private void styleButton(JButton button, Color bgColor, Color hoverColor) {
